@@ -63,6 +63,7 @@ func cancelOnTermination(cancel context.CancelFunc, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
 		log.Printf("received SIGTERM %v\n", <-s)
+		// TODO Wait process to be finished
 		cancel()
 	}()
 }
@@ -79,33 +80,37 @@ func ColorString(i int, str string) string {
 	return fmt.Sprintf("\033[1;%dm%s\033[0m", i, str)
 }
 
-func main() {
+func RunProc(wg sync.WaitGroup, c chan string, i int, proc Proc) {
 	colors := []int{32, 33, 34, 35, 36}
+
+	cmd := CommandWait(&wg, "/bin/sh", "-c", proc.cmd)
+	stdoutIn, _ := cmd.StdoutPipe()
+	stderrIn, _ := cmd.StderrPipe()
+
+	label := ColorString(colors[i%len(colors)], proc.name)
+	PipeReaderOutputToChan(stdoutIn, label, c)
+	PipeReaderOutputToChan(stderrIn, label, c)
+
+	go OutputLog(c)
+
+	err := cmd.Start()
+	if err != nil {
+		log.Fatalf("cmd.Start() failed with '%s'\n", err)
+	}
+
+	fmt.Printf("Booting %v: %v\n", label, proc.cmd)
+}
+
+func main() {
 	var wg sync.WaitGroup
 	c := make(chan string)
 
 	procfile := ParseProcfile(os.Args[1])
 	for i, proc := range procfile {
 		wg.Add(1)
-		go func(proc Proc, i int) {
-			cmd := CommandWait(&wg, "/bin/sh", "-c", proc.cmd)
-			stdoutIn, _ := cmd.StdoutPipe()
-			stderrIn, _ := cmd.StderrPipe()
-
-			label := ColorString(colors[i%len(colors)], proc.name)
-			PipeReaderOutputToChan(stdoutIn, label, c)
-			PipeReaderOutputToChan(stderrIn, label, c)
-
-			go OutputLog(c)
-
-			err := cmd.Start()
-			if err != nil {
-				log.Fatalf("cmd.Start() failed with '%s'\n", err)
-			}
-
-			fmt.Printf("Booting %v: %v\n", label, proc.cmd)
-		}(proc, i)
+		RunProc(wg, c, i, proc)
 	}
 	wg.Wait()
+	// TODO Wait all logs to be flushed
 	fmt.Println("exiting")
 }
